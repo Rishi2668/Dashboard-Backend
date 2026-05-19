@@ -1,9 +1,17 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.score_target import TargetAnalyticsResponse
+
+# India Standard Time (UTC+5:30, no DST). Fixed offset works on Windows without tzdata.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _latest_allowed_mock_date() -> date:
+    """Latest calendar date allowed for a mock (today in IST)."""
+    return datetime.now(IST).date()
 
 
 class SubjectSectionInput(BaseModel):
@@ -44,8 +52,12 @@ class MockTestCreate(BaseModel):
     @field_validator("test_date")
     @classmethod
     def test_date_not_future(cls, v: date) -> date:
-        if v > date.today():
-            raise ValueError("Mock date cannot be in the future")
+        latest = _latest_allowed_mock_date()
+        if v > latest:
+            raise ValueError(
+                f"Mock date cannot be after today ({latest.isoformat()}, India time). "
+                "Use today's date for tests taken today."
+            )
         return v
 
 
@@ -91,6 +103,21 @@ class MockAIInsight(BaseModel):
     category: str
 
 
+class SectionalSubjectTarget(BaseModel):
+    """Dashboard subject target vs latest sectional performance."""
+
+    key: str
+    label: str
+    target: float
+    target_max: float
+    actual: float
+    actual_max: float
+    gap: float
+    achievement_pct: float
+    has_sectional_data: bool = False
+    sectional_count: int = 0
+
+
 class MockAnalytics(BaseModel):
     latest_score: float
     highest_score: float
@@ -111,4 +138,6 @@ class MockAnalytics(BaseModel):
     strongest_subject: Optional[str]
     improvement_delta: Optional[float]
     ai_insights: list[MockAIInsight] = Field(default_factory=list)
+    target_insights: list[MockAIInsight] = Field(default_factory=list)
+    subject_targets: list[SectionalSubjectTarget] = Field(default_factory=list)
     target_analytics: Optional[TargetAnalyticsResponse] = None

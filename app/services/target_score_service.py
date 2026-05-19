@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.mock_test import MockTest
 from app.models.score_target import UserScoreTarget
 from app.models.user import User
+from app.services.mock_classification import filter_mocks_by_type
 from app.schemas.score_target import (
     OverallTargetComparison,
     ScoreTargetResponse,
@@ -52,24 +53,29 @@ def _targets_response(t: UserScoreTarget) -> ScoreTargetResponse:
     return ScoreTargetResponse.model_validate(t)
 
 
-async def _latest_mock(db: AsyncSession, user_id: int) -> MockTest | None:
-    result = await db.execute(
-        select(MockTest)
-        .where(MockTest.user_id == user_id)
-        .order_by(MockTest.test_date.desc())
-        .limit(1)
-    )
-    return result.scalar_one_or_none()
-
-
-async def _recent_mocks(db: AsyncSession, user_id: int, limit: int = 10) -> list[MockTest]:
+async def _fetch_mocks(db: AsyncSession, user_id: int, limit: int = 80) -> list[MockTest]:
     result = await db.execute(
         select(MockTest)
         .where(MockTest.user_id == user_id)
         .order_by(MockTest.test_date.desc())
         .limit(limit)
     )
-    return list(reversed(result.scalars().all()))
+    return list(result.scalars().all())
+
+
+async def _full_mocks(db: AsyncSession, user_id: int, limit: int = 50) -> list[MockTest]:
+    rows = await _fetch_mocks(db, user_id, limit * 3)
+    return filter_mocks_by_type(rows, "full")[:limit]
+
+
+async def _latest_mock(db: AsyncSession, user_id: int) -> MockTest | None:
+    full = await _full_mocks(db, user_id, 1)
+    return full[0] if full else None
+
+
+async def _recent_mocks(db: AsyncSession, user_id: int, limit: int = 10) -> list[MockTest]:
+    full = await _full_mocks(db, user_id, limit)
+    return list(reversed(full))
 
 
 def _subject_comparison(
@@ -96,16 +102,20 @@ def _subject_comparison(
 
 class TargetScoreService:
     async def build_analytics(
-        self, db: AsyncSession, user: User, targets: UserScoreTarget | None = None
+        self,
+        db: AsyncSession,
+        user: User,
+        targets: UserScoreTarget | None = None,
+        latest_full: MockTest | None = None,
     ) -> TargetAnalyticsResponse:
         t = targets or await get_or_create_targets(db, user)
-        latest = await _latest_mock(db, user.id)
+        latest = latest_full if latest_full is not None else await _latest_mock(db, user.id)
 
         if latest:
             actual_overall = latest.total_score
             actual_max = latest.max_score
         else:
-            actual_overall = user.current_mock_score
+            actual_overall = 0.0
             actual_max = t.overall_max_marks
 
         overall_target = t.overall_target_marks
@@ -165,12 +175,9 @@ class TargetScoreService:
         self, db: AsyncSession, user_id: int, target: float
     ) -> list[TargetTrendPoint]:
         since = date.today() - timedelta(days=28)
-        result = await db.execute(
-            select(MockTest)
-            .where(MockTest.user_id == user_id, MockTest.test_date >= since)
-            .order_by(MockTest.test_date.asc())
-        )
-        mocks = list(result.scalars().all())
+        rows = await _fetch_mocks(db, user_id, 120)
+        mocks = [m for m in filter_mocks_by_type(rows, "full") if m.test_date >= since]
+        mocks.sort(key=lambda m: m.test_date)
         buckets: dict[str, list[float]] = {}
         for m in mocks:
             week = m.test_date.strftime("%Y-W%W")
@@ -190,13 +197,7 @@ class TargetScoreService:
         return points[-6:]
 
     async def _monthly_improvement(self, db: AsyncSession, user_id: int) -> float | None:
-        result = await db.execute(
-            select(MockTest)
-            .where(MockTest.user_id == user_id)
-            .order_by(MockTest.test_date.desc())
-            .limit(10)
-        )
-        mocks = list(result.scalars().all())
+        mocks = await _full_mocks(db, user_id, 10)
         if len(mocks) < 2:
             return None
         recent = mocks[:3]
@@ -208,13 +209,7 @@ class TargetScoreService:
         return round(r_avg - o_avg, 1)
 
     async def _score_prediction(self, db: AsyncSession, user_id: int, current: float) -> float | None:
-        result = await db.execute(
-            select(MockTest)
-            .where(MockTest.user_id == user_id)
-            .order_by(MockTest.test_date.desc())
-            .limit(5)
-        )
-        mocks = list(result.scalars().all())
+        mocks = await _full_mocks(db, user_id, 5)
         if len(mocks) < 2:
             return round(current, 1) if current else None
         mocks = list(reversed(mocks))

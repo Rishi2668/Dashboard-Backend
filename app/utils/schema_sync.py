@@ -22,6 +22,7 @@ PATCHES = [
     "UPDATE calc_practice_sessions SET xp_earned = 0 WHERE xp_earned IS NULL",
     # Mock tests: SSC CGL structured fields
     "ALTER TABLE mock_tests ADD COLUMN IF NOT EXISTS test_type VARCHAR(20) DEFAULT 'full'",
+    "ALTER TABLE mock_tests ADD COLUMN IF NOT EXISTS section_subject VARCHAR(20)",
     "ALTER TABLE mock_tests ADD COLUMN IF NOT EXISTS total_questions INTEGER DEFAULT 100",
     "ALTER TABLE mock_tests ADD COLUMN IF NOT EXISTS reasoning_max_marks DOUBLE PRECISION DEFAULT 50",
     "ALTER TABLE mock_tests ADD COLUMN IF NOT EXISTS reasoning_total_questions INTEGER DEFAULT 25",
@@ -43,6 +44,43 @@ PATCHES = [
     "ALTER TABLE mock_tests ADD COLUMN IF NOT EXISTS gk_attempted INTEGER DEFAULT 0",
     "ALTER TABLE mock_tests ADD COLUMN IF NOT EXISTS gk_correct INTEGER DEFAULT 0",
     "ALTER TABLE mock_tests ADD COLUMN IF NOT EXISTS gk_wrong INTEGER DEFAULT 0",
+    # Re-tag single-subject rows that were saved as full mocks (sectionals)
+    """UPDATE mock_tests SET test_type = 'sectional', section_subject = 'reasoning'
+       WHERE (test_type IS NULL OR test_type = 'full')
+       AND COALESCE(reasoning_attempted, 0) > 0
+       AND COALESCE(quant_attempted, 0) = 0 AND COALESCE(english_attempted, 0) = 0 AND COALESCE(gk_attempted, 0) = 0""",
+    """UPDATE mock_tests SET test_type = 'sectional', section_subject = 'quant'
+       WHERE (test_type IS NULL OR test_type = 'full')
+       AND COALESCE(quant_attempted, 0) > 0
+       AND COALESCE(reasoning_attempted, 0) = 0 AND COALESCE(english_attempted, 0) = 0 AND COALESCE(gk_attempted, 0) = 0""",
+    """UPDATE mock_tests SET test_type = 'sectional', section_subject = 'english'
+       WHERE (test_type IS NULL OR test_type = 'full')
+       AND COALESCE(english_attempted, 0) > 0
+       AND COALESCE(reasoning_attempted, 0) = 0 AND COALESCE(quant_attempted, 0) = 0 AND COALESCE(gk_attempted, 0) = 0""",
+    """UPDATE mock_tests SET test_type = 'sectional', section_subject = 'gk'
+       WHERE (test_type IS NULL OR test_type = 'full')
+       AND COALESCE(gk_attempted, 0) > 0
+       AND COALESCE(reasoning_attempted, 0) = 0 AND COALESCE(quant_attempted, 0) = 0 AND COALESCE(english_attempted, 0) = 0""",
+    """UPDATE mock_tests SET test_type = 'sectional', section_subject = 'reasoning'
+       WHERE (test_type IS NULL OR test_type = 'full')
+       AND COALESCE(reasoning_score, 0) > 0
+       AND COALESCE(quant_score, 0) = 0 AND COALESCE(english_score, 0) = 0 AND COALESCE(gk_score, 0) = 0
+       AND COALESCE(max_score, 200) <= 50""",
+    """UPDATE mock_tests SET test_type = 'sectional', section_subject = 'quant'
+       WHERE (test_type IS NULL OR test_type = 'full')
+       AND COALESCE(quant_score, 0) > 0
+       AND COALESCE(reasoning_score, 0) = 0 AND COALESCE(english_score, 0) = 0 AND COALESCE(gk_score, 0) = 0
+       AND COALESCE(max_score, 200) <= 50""",
+    """UPDATE mock_tests SET test_type = 'sectional', section_subject = 'english'
+       WHERE (test_type IS NULL OR test_type = 'full')
+       AND COALESCE(english_score, 0) > 0
+       AND COALESCE(reasoning_score, 0) = 0 AND COALESCE(quant_score, 0) = 0 AND COALESCE(gk_score, 0) = 0
+       AND COALESCE(max_score, 200) <= 50""",
+    """UPDATE mock_tests SET test_type = 'sectional', section_subject = 'gk'
+       WHERE (test_type IS NULL OR test_type = 'full')
+       AND COALESCE(gk_score, 0) > 0
+       AND COALESCE(reasoning_score, 0) = 0 AND COALESCE(quant_score, 0) = 0 AND COALESCE(english_score, 0) = 0
+       AND COALESCE(max_score, 200) <= 50""",
 ]
 
 

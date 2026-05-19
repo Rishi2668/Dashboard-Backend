@@ -11,11 +11,13 @@ from app.models.study import StudySession
 from app.models.syllabus import UserChapterProgress
 from app.models.user import User
 from app.services.ai.recommendation_engine import get_level_from_xp
+from app.services.mock_classification import filter_mocks_by_type
 
 # XP rules (keep in sync with route handlers)
 XP_PER_STUDY_HOUR = 10
 XP_PER_STUDY_TASK = 5
-XP_PER_MOCK = 50
+XP_PER_FULL_MOCK = 50
+XP_PER_SECTIONAL = 25
 XP_PER_NOTE = 10
 XP_PER_REVISION_COMPLETE = 20
 XP_PER_SYLLABUS_CHAPTER = 25
@@ -39,10 +41,12 @@ async def compute_xp_breakdown(db: AsyncSession, user_id: int) -> dict[str, int]
     hours, tasks = study_r.one()
     study_xp = int(float(hours or 0) * XP_PER_STUDY_HOUR) + int(tasks or 0) * XP_PER_STUDY_TASK
 
-    mock_r = await db.execute(
-        select(func.count(MockTest.id)).where(MockTest.user_id == user_id)
-    )
-    mock_xp = int(mock_r.scalar() or 0) * XP_PER_MOCK
+    mocks_r = await db.execute(select(MockTest).where(MockTest.user_id == user_id))
+    all_mocks = list(mocks_r.scalars().all())
+    full_count = len(filter_mocks_by_type(all_mocks, "full"))
+    sectional_count = len(filter_mocks_by_type(all_mocks, "sectional"))
+    mock_xp = full_count * XP_PER_FULL_MOCK
+    sectional_xp = sectional_count * XP_PER_SECTIONAL
 
     notes_r = await db.execute(select(func.count(Note.id)).where(Note.user_id == user_id))
     notes_xp = int(notes_r.scalar() or 0) * XP_PER_NOTE
@@ -69,11 +73,12 @@ async def compute_xp_breakdown(db: AsyncSession, user_id: int) -> dict[str, int]
         syl_rev_r.scalar() or 0
     ) * XP_PER_SYLLABUS_REVISION
 
-    accounted = calc_xp + study_xp + mock_xp + notes_xp + revision_xp + syllabus_xp
+    accounted = calc_xp + study_xp + mock_xp + sectional_xp + notes_xp + revision_xp + syllabus_xp
     return {
         "calc_practice": calc_xp,
         "study_sessions": study_xp,
         "mock_tests": mock_xp,
+        "sectional_tests": sectional_xp,
         "notes": notes_xp,
         "revision": revision_xp,
         "syllabus": syllabus_xp,

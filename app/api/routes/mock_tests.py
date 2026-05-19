@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,15 @@ from app.schemas.mock_test import (
     SubjectSectionResponse,
 )
 from app.services.mock_ai_engine import MockAIEngine, SUBJECT_LABELS
+from app.services.mock_analytics_service import build_mock_analytics
+from app.services.mock_classification import (
+    FULL_MOCK_MIN_MAX_SCORE,
+    classify_from_sections,
+    ensure_mock_classification,
+    filter_mocks_by_type,
+)
+from app.services.mock_reclassify import reclassify_user_mocks
+from app.services.user_mock_scores import refresh_user_mock_scores
 from app.services.mock_calculations import section_accuracy, section_negative, section_wrong
 from app.services.xp_breakdown import sync_user_xp
 from app.services.target_score_service import TargetScoreService
@@ -92,14 +101,23 @@ def _mock_to_response(mock: MockTest) -> MockTestResponse:
 
 
 @router.get("/", response_model=list[MockTestResponse])
-async def list_mocks(current_user: CurrentUser, db: AsyncSession = Depends(get_db), limit: int = 50):
+async def list_mocks(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+    test_type: str | None = None,
+):
     result = await db.execute(
         select(MockTest)
         .where(MockTest.user_id == current_user.id)
         .order_by(MockTest.test_date.desc())
-        .limit(limit)
+        .limit(limit * 3 if test_type else limit)
     )
-    return [_mock_to_response(m) for m in result.scalars().all()]
+    rows = list(result.scalars().all())
+    await reclassify_user_mocks(db, current_user.id)
+    if test_type in ("full", "sectional"):
+        rows = filter_mocks_by_type(rows, test_type)[:limit]
+    return [_mock_to_response(m) for m in rows]
 
 
 @router.post("/", response_model=MockTestResponse, status_code=201)
@@ -108,6 +126,20 @@ async def create_mock(
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ):
+    try:
+        return await _create_mock_impl(data, current_user, db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Could not save mock: {exc!s}") from exc
+
+
+async def _create_mock_impl(
+    data: MockTestCreate,
+    current_user: CurrentUser,
+    db: AsyncSession,
+) -> MockTestResponse:
     sections = {
         "reasoning": _finalize_section(data.reasoning),
         "quant": _finalize_section(data.quant),
@@ -128,11 +160,30 @@ async def create_mock(
     max_score = data.max_score or sum(s["max_marks"] for s in sections.values())
     total_questions = data.total_questions or sum(s["total_questions"] for s in sections.values())
 
+    resolved_type, section_key = classify_from_sections(sections)
+    if resolved_type == "sectional":
+        final_type = "sectional"
+        final_section = section_key
+    elif data.test_type == "sectional":
+        final_type = "sectional"
+        final_section = section_key or next(
+            (
+                k
+                for k in SUBJECT_KEYS
+                if sections[k]["attempted"] > 0 or sections[k]["secured_marks"] > 0
+            ),
+            None,
+        )
+    else:
+        final_type = "full"
+        final_section = None
+
     mock = MockTest(
         user_id=current_user.id,
         test_name=data.test_name or f"SSC CGL Mock — {data.test_date}",
         test_date=data.test_date,
-        test_type=data.test_type,
+        test_type=final_type,
+        section_subject=final_section,
         total_score=total_score,
         max_score=max_score,
         total_questions=total_questions,
@@ -145,183 +196,119 @@ async def create_mock(
     for key in SUBJECT_KEYS:
         _apply_section(mock, key, sections[key])
 
+    if data.test_type == "full" or max_score >= FULL_MOCK_MIN_MAX_SCORE:
+        mock.test_type = "full"
+        mock.section_subject = None
+    else:
+        ensure_mock_classification(mock)
+
+    final_type = mock.test_type
+
     db.add(mock)
 
-    if total_score > current_user.best_score:
-        current_user.best_score = total_score
-    current_user.current_mock_score = total_score
-    current_user.overall_accuracy = accuracy
+    is_full = final_type == "full"
+    if is_full:
+        if total_score > current_user.best_score:
+            current_user.best_score = total_score
+        current_user.current_mock_score = total_score
+        current_user.overall_accuracy = accuracy
 
-    streak_result = await db.execute(
-        select(Streak).where(Streak.user_id == current_user.id, Streak.streak_type == "mock")
-    )
-    streak = streak_result.scalar_one_or_none()
-    if not streak:
-        streak = Streak(user_id=current_user.id, streak_type="mock")
-        db.add(streak)
-    today = date.today()
-    if streak.last_activity_date != today:
-        if streak.last_activity_date == today - timedelta(days=1):
-            streak.current_count += 1
-        else:
-            streak.current_count = 1
-        streak.last_activity_date = today
-        streak.longest_count = max(streak.longest_count, streak.current_count)
+    if is_full:
+        streak_result = await db.execute(
+            select(Streak).where(Streak.user_id == current_user.id, Streak.streak_type == "mock")
+        )
+        streak = streak_result.scalar_one_or_none()
+        if not streak:
+            streak = Streak(user_id=current_user.id, streak_type="mock")
+            db.add(streak)
+        today = date.today()
+        if streak.last_activity_date != today:
+            if streak.last_activity_date == today - timedelta(days=1):
+                streak.current_count += 1
+            else:
+                streak.current_count = 1
+            streak.last_activity_date = today
+            streak.longest_count = max(streak.longest_count, streak.current_count)
 
     await db.flush()
+    await refresh_user_mock_scores(db, current_user)
     await sync_user_xp(db, current_user)
     await db.refresh(mock)
     return _mock_to_response(mock)
 
 
-async def _target_analytics(db: AsyncSession, user_id: int):
+async def _target_analytics(
+    db: AsyncSession, user_id: int, latest_full: MockTest | None = None
+):
     user_result = await db.execute(
         select(User).where(User.id == user_id).options(selectinload(User.score_target))
     )
     user = user_result.scalar_one()
-    return await TargetScoreService().build_analytics(db, user)
+    return await TargetScoreService().build_analytics(db, user, latest_full=latest_full)
 
 
 @router.get("/analytics", response_model=MockAnalytics)
-async def get_analytics(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
-    target_data = await _target_analytics(db, current_user.id)
+async def get_analytics(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    test_type: str = Query("full", alias="test_type"),
+    testType: str | None = Query(None, alias="testType"),
+):
+    resolved = (testType or test_type or "full").lower()
+    if resolved not in ("full", "sectional"):
+        resolved = "full"
+
+    await reclassify_user_mocks(db, current_user.id)
     result = await db.execute(
         select(MockTest).where(MockTest.user_id == current_user.id).order_by(MockTest.test_date.asc())
     )
     mocks = list(result.scalars().all())
-    empty = MockAnalytics(
-        latest_score=0,
-        highest_score=0,
-        average_score=0,
-        average_accuracy=0,
-        latest_score_percentage=0,
-        total_attempted=0,
-        total_correct=0,
-        total_wrong=0,
-        total_negative=0,
-        total_mocks=0,
-        score_progression=[],
-        accuracy_trend=[],
-        section_comparison=[],
-        subject_accuracy_trends={k: [] for k in SUBJECT_KEYS},
-        weekly_trend=[],
-        weak_subjects=[],
-        strongest_subject=None,
-        improvement_delta=None,
-        ai_insights=MockAIEngine.merge_target_insights(
-            MockAIEngine().generate_insights([]), target_data
-        ),
-        target_analytics=target_data,
-    )
-    if not mocks:
-        return empty
+    full_mocks = filter_mocks_by_type(mocks, "full")
 
-    latest = mocks[-1]
-    score_progression = [
-        {
-            "date": str(m.test_date),
-            "score": m.total_score,
-            "max_score": m.max_score,
-            "percentage": round(m.total_score / m.max_score * 100, 1) if m.max_score else 0,
-            "name": m.test_name or "",
-        }
-        for m in mocks
-    ]
-    accuracy_trend = [{"date": str(m.test_date), "accuracy": m.accuracy} for m in mocks]
-
-    section_comparison = []
-    subject_accuracy_trends: dict[str, list] = {k: [] for k in SUBJECT_KEYS}
-    labels = {
-        "reasoning": "Reasoning",
-        "quant": "Quant",
-        "english": "English",
-        "gk": "GK",
-    }
-    for key in SUBJECT_KEYS:
-        section_comparison.append(
-            {
-                "subject": labels[key],
-                "subject_key": key,
-                "score": getattr(latest, f"{key}_score"),
-                "max_marks": getattr(latest, f"{key}_max_marks"),
-                "accuracy": getattr(latest, f"{key}_accuracy"),
-                "attempted": getattr(latest, f"{key}_attempted"),
-                "total_questions": getattr(latest, f"{key}_total_questions"),
-                "score_percentage": round(
-                    getattr(latest, f"{key}_score") / getattr(latest, f"{key}_max_marks") * 100, 1
-                )
-                if getattr(latest, f"{key}_max_marks")
-                else 0,
-            }
+    target_data = None
+    if resolved == "full" and full_mocks:
+        target_data = await _target_analytics(db, current_user.id, latest_full=full_mocks[-1])
+    elif resolved == "sectional":
+        user_result = await db.execute(
+            select(User).where(User.id == current_user.id).options(selectinload(User.score_target))
         )
-        for m in mocks:
-            subject_accuracy_trends[key].append(
-                {
-                    "date": str(m.test_date),
-                    "accuracy": getattr(m, f"{key}_accuracy"),
-                    "score": getattr(m, f"{key}_score"),
-                }
-            )
+        user = user_result.scalar_one()
+        target_data = await TargetScoreService().build_analytics(db, user, latest_full=None)
 
-    weekly: dict[str, list] = {}
-    for m in mocks[-12:]:
-        week_key = m.test_date.strftime("%Y-W%W")
-        weekly.setdefault(week_key, []).append(m.total_score)
-    weekly_trend = [{"week": k, "avg_score": sum(v) / len(v)} for k, v in weekly.items()]
-
-    accs = [(labels[k], getattr(latest, f"{k}_accuracy")) for k in SUBJECT_KEYS]
-    accs.sort(key=lambda x: x[1])
-    weak_subjects = [
-        {"subject": s, "accuracy": a, "priority": "high" if a < 60 else "medium"}
-        for s, a in accs[:2]
-        if a < 75
-    ]
-    strongest = max(accs, key=lambda x: x[1])[0] if accs else None
-
-    improvement_delta = None
-    if len(mocks) >= 2:
-        improvement_delta = round(mocks[-1].total_score - mocks[-2].total_score, 1)
-
-    latest_pct = round(latest.total_score / latest.max_score * 100, 1) if latest.max_score else 0
-
-    return MockAnalytics(
-        latest_score=latest.total_score,
-        highest_score=max(m.total_score for m in mocks),
-        average_score=sum(m.total_score for m in mocks) / len(mocks),
-        average_accuracy=sum(m.accuracy for m in mocks) / len(mocks),
-        latest_score_percentage=latest_pct,
-        total_attempted=sum(m.attempted for m in mocks),
-        total_correct=sum(m.correct for m in mocks),
-        total_wrong=sum(m.wrong for m in mocks),
-        total_negative=sum(m.negative_marks for m in mocks),
-        total_mocks=len(mocks),
-        score_progression=score_progression,
-        accuracy_trend=accuracy_trend,
-        section_comparison=section_comparison,
-        subject_accuracy_trends=subject_accuracy_trends,
-        weekly_trend=weekly_trend,
-        weak_subjects=weak_subjects,
-        strongest_subject=strongest,
-        improvement_delta=improvement_delta,
-        ai_insights=MockAIEngine.merge_target_insights(
-            MockAIEngine().generate_insights(mocks), target_data
-        ),
-        target_analytics=target_data,
-    )
+    return build_mock_analytics(mocks, resolved, target_data)
 
 
 @router.get("/ai-insights")
-async def mock_ai_insights(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+async def mock_ai_insights(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    test_type: str = Query("full", alias="test_type"),
+    testType: str | None = Query(None, alias="testType"),
+):
+    resolved = (testType or test_type or "full").lower()
+    if resolved not in ("full", "sectional"):
+        resolved = "full"
+    await reclassify_user_mocks(db, current_user.id)
     result = await db.execute(
-        select(MockTest)
-        .where(MockTest.user_id == current_user.id)
-        .order_by(MockTest.test_date.asc())
+        select(MockTest).where(MockTest.user_id == current_user.id).order_by(MockTest.test_date.asc())
     )
-    mocks = list(result.scalars().all())
+    all_mocks = list(result.scalars().all())
+    mocks = filter_mocks_by_type(all_mocks, resolved)
     target_data = await _target_analytics(db, current_user.id)
-    return MockAIEngine.merge_target_insights(
-        MockAIEngine().generate_insights(mocks), target_data
-    )
+    if resolved == "sectional":
+        from app.services.sectional_ai_engine import SectionalAIEngine
+
+        return SectionalAIEngine().generate_insights(mocks, target_data)
+    insights = MockAIEngine().generate_insights(mocks)
+    if target_data:
+        return {
+            "mock_insights": insights,
+            "target_insights": [
+                {"title": t.title, "message": t.message, "priority": t.priority, "category": t.category}
+                for t in target_data.ai_insights
+            ],
+        }
+    return {"mock_insights": insights, "target_insights": []}
 
 
 @router.delete("/{mock_id}", status_code=204)
@@ -336,24 +323,6 @@ async def delete_mock(mock_id: int, current_user: CurrentUser, db: AsyncSession 
     await db.flush()
     await sync_user_xp(db, current_user)
 
-    # Refresh user mock aggregates from remaining tests
-    remaining = await db.execute(
-        select(MockTest)
-        .where(MockTest.user_id == current_user.id)
-        .order_by(MockTest.test_date.desc())
-        .limit(1)
-    )
-    last = remaining.scalar_one_or_none()
-    all_scores = await db.execute(
-        select(MockTest.total_score).where(MockTest.user_id == current_user.id)
-    )
-    scores = [row[0] for row in all_scores.all()]
-    if scores:
-        current_user.best_score = max(scores)
-        current_user.current_mock_score = last.total_score if last else scores[0]
-        current_user.overall_accuracy = last.accuracy if last else 0
-    else:
-        current_user.current_mock_score = 0
-        current_user.best_score = 0
-        current_user.overall_accuracy = 0
+    # Refresh user mock aggregates from remaining full mocks only (incl. heuristic)
+    await refresh_user_mock_scores(db, current_user)
     await db.flush()

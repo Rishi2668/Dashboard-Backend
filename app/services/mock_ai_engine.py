@@ -1,10 +1,9 @@
-"""AI insights for SSC CGL mock tests (performance + target goals)."""
+"""AI insights for full SSC CGL mock tests only (not sectionals)."""
 
 from __future__ import annotations
 
 from app.models.mock_test import MockTest
 from app.schemas.mock_test import MockAIInsight
-from app.schemas.score_target import TargetAnalyticsResponse
 
 SUBJECT_LABELS = {
     "reasoning": "General Intelligence & Reasoning",
@@ -28,8 +27,8 @@ class MockAIEngine:
         if not mocks:
             return [
                 MockAIInsight(
-                    title="Start your mock journey",
-                    message="Log your first full mock or sectional to unlock score trends and section insights.",
+                    title="Start your full mock journey",
+                    message="Log your first 200-mark full mock to unlock score trends and section insights.",
                     priority="high",
                     category="recommendation",
                 )
@@ -124,29 +123,3 @@ class MockAIEngine:
             )
 
         return insights[:6]
-
-    @staticmethod
-    def merge_target_insights(
-        mock_insights: list[MockAIInsight],
-        target_analytics: TargetAnalyticsResponse | None,
-    ) -> list[MockAIInsight]:
-        """Combine mock performance insights with target-score AI insights for analytics UI."""
-        if not target_analytics or not target_analytics.ai_insights:
-            return mock_insights[:8]
-
-        combined = list(mock_insights)
-        seen = {i.title.lower() for i in combined}
-        for t in target_analytics.ai_insights:
-            key = t.title.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            combined.append(
-                MockAIInsight(
-                    title=t.title,
-                    message=t.message,
-                    priority=t.priority,
-                    category=t.category if t.category else "target",
-                )
-            )
-        return combined[:8]

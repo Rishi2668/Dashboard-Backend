@@ -12,6 +12,7 @@ from app.models.streak import Achievement, Streak
 from app.models.study import StudySession
 from app.models.user import User
 from app.services.target_score_service import TargetScoreService
+from app.services.user_mock_scores import refresh_user_mock_scores
 from app.schemas.auth import UserResponse
 from app.schemas.dashboard import AchievementResponse, DashboardStats, StreakResponse, XpBreakdown
 from app.services.ai.recommendation_engine import get_level_from_xp
@@ -86,6 +87,7 @@ async def get_dashboard_stats(current_user: CurrentUser, db: AsyncSession = Depe
         select(User).where(User.id == current_user.id).options(selectinload(User.score_target))
     )
     user_loaded = user_result.scalar_one()
+    await refresh_user_mock_scores(db, user_loaded)
     target_analytics = await TargetScoreService().build_analytics(db, user_loaded)
 
     return DashboardStats(

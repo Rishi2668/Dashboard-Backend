@@ -32,6 +32,7 @@ class XpBreakdown(BaseModel):
     calc_practice: int = 0
     study_sessions: int = 0
     mock_tests: int = 0
+    sectional_tests: int = 0
     notes: int = 0
     revision: int = 0
     syllabus: int = 0

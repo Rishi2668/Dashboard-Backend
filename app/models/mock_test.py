@@ -18,6 +18,7 @@ class MockTest(Base):
     test_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     test_date: Mapped[date] = mapped_column(Date, index=True)
     test_type: Mapped[str] = mapped_column(String(20), default="full", index=True)
+    section_subject: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
 
     total_score: Mapped[float] = mapped_column(Float, default=0.0)
     max_score: Mapped[float] = mapped_column(Float, default=200.0)
