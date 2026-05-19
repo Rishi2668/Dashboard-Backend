@@ -42,7 +42,7 @@ app = FastAPI(
 
 cors_origins_list = [
     "http://localhost:5173",
-    "https://ssc-dashboard.vercel.app",
+    "https://ssc-dashboard-beta-nine.vercel.app/login",
 ]
 
 app.add_middleware(
