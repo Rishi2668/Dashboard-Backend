@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser
-from app.core.cache import cache
+from app.core.cache import invalidate_dashboard_stats_cache
 from app.core.database import get_db
 from app.models.mock_test import MockTest
 from app.models.streak import Streak
@@ -253,7 +253,7 @@ async def _create_mock_impl(
     await db.flush()
     await refresh_user_mock_scores(db, current_user)
     await sync_user_xp(db, current_user)
-    await cache.delete(f"dashboard:stats:{current_user.id}")
+    await invalidate_dashboard_stats_cache(current_user.id)
     await db.refresh(mock)
     return _mock_to_response(mock)
 
@@ -346,5 +346,5 @@ async def delete_mock(mock_id: int, current_user: CurrentUser, db: AsyncSession 
 
     # Refresh user mock aggregates from remaining full mocks only (incl. heuristic)
     await refresh_user_mock_scores(db, current_user)
-    await cache.delete(f"dashboard:stats:{current_user.id}")
+    await invalidate_dashboard_stats_cache(current_user.id)
     await db.flush()

@@ -28,6 +28,11 @@ class AchievementResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ApiFeatures(BaseModel):
+    study_session_delete: bool = True
+    revision_management_v2: bool = True
+
+
 class XpBreakdown(BaseModel):
     calc_practice: int = 0
     study_sessions: int = 0
@@ -60,6 +65,7 @@ class DashboardStats(BaseModel):
     achievements: list[AchievementResponse]
     streaks: list[StreakResponse]
     target_analytics: Optional[TargetAnalyticsResponse] = None
+    api_features: ApiFeatures = ApiFeatures()
 
 
 class QuoteResponse(BaseModel):

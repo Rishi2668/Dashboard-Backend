@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser
-from app.core.cache import cache
+from app.core.cache import cache, dashboard_stats_cache_key
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.mock_test import MockTest
@@ -16,7 +16,7 @@ from app.models.user import User
 from app.services.target_score_service import TargetScoreService
 from app.services.user_mock_scores import refresh_user_mock_scores
 from app.schemas.auth import UserResponse
-from app.schemas.dashboard import AchievementResponse, DashboardStats, StreakResponse, XpBreakdown
+from app.schemas.dashboard import AchievementResponse, ApiFeatures, DashboardStats, StreakResponse, XpBreakdown
 from app.services.ai.recommendation_engine import get_level_from_xp
 from app.services.xp_breakdown import sync_user_xp
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -40,7 +40,7 @@ async def _ensure_streaks(db: AsyncSession, user_id: int) -> list[Streak]:
 
 @router.get("/stats", response_model=DashboardStats)
 async def get_dashboard_stats(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
-    cache_key = f"dashboard:stats:{current_user.id}"
+    cache_key = dashboard_stats_cache_key(current_user.id)
     cached = await cache.get(cache_key)
     if cached is not None:
         return cached
@@ -135,6 +135,7 @@ async def get_dashboard_stats(current_user: CurrentUser, db: AsyncSession = Depe
         achievements=[AchievementResponse.model_validate(a) for a in achievements],
         streaks=[StreakResponse.model_validate(s) for s in streaks],
         target_analytics=target_analytics,
+        api_features=ApiFeatures(),
     )
     await cache.set(cache_key, payload, ttl_sec=30)
     return payload

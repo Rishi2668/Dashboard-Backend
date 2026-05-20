@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser
-from app.core.cache import cache
+from app.core.cache import cache, invalidate_dashboard_stats_cache
 from app.core.database import get_db
 from app.models.revision import RevisionItem
 from app.models.revision_history import RevisionHistory
@@ -69,7 +69,7 @@ async def _update_revision_streak(db: AsyncSession, user_id: int) -> None:
 async def _invalidate_revision_cache(user_id: int) -> None:
     await cache.delete(f"revision:dashboard:{user_id}")
     await cache.delete(f"revision:analytics:{user_id}")
-    await cache.delete(f"dashboard:stats:{user_id}")
+    await invalidate_dashboard_stats_cache(user_id)
 
 
 @router.get("/dashboard", response_model=RevisionDashboardSummary)

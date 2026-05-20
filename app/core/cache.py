@@ -46,3 +46,13 @@ class TTLCache:
 
 cache = TTLCache()
 
+
+def dashboard_stats_cache_key(user_id: int) -> str:
+    return f"dashboard:stats:v2:{user_id}"
+
+
+async def invalidate_dashboard_stats_cache(user_id: int) -> None:
+    """Clear dashboard stats (heatmap, today hours, etc.) after study/mock changes."""
+    await cache.delete(dashboard_stats_cache_key(user_id))
+    await cache.delete(f"dashboard:stats:{user_id}")  # legacy key
+
