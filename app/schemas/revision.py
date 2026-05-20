@@ -9,7 +9,7 @@ RevisionStatus = Literal["pending", "upcoming", "completed", "overdue"]
 class RevisionCreate(BaseModel):
     topic: str = Field(min_length=1, max_length=255)
     subject: str
-    interval_days: int = Field(default=1, ge=1, le=90)
+    interval_days: int = Field(default=3, ge=1, le=90)
     next_revision_date: Optional[date] = None
     notes: Optional[str] = None
     priority: str = "medium"

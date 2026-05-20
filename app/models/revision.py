@@ -18,7 +18,7 @@ class RevisionItem(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     topic: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str] = mapped_column(String(50), index=True)
-    interval_days: Mapped[int] = mapped_column(Integer, default=1)
+    interval_days: Mapped[int] = mapped_column(Integer, default=3)
     next_revision_date: Mapped[date] = mapped_column(Date, index=True)
     last_revised: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     completed: Mapped[bool] = mapped_column(Boolean, default=False)

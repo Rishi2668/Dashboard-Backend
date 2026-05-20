@@ -20,6 +20,11 @@ from app.schemas.revision import (
     RevisionListResponse,
     RevisionUpdate,
 )
+from app.services.revision_schedule import (
+    REVISION_FIRST_DAY,
+    advance_revision_item,
+    first_revision_date,
+)
 from app.services.revision_service import (
     build_ai_recommendations,
     build_analytics,
@@ -179,12 +184,12 @@ async def list_revisions(
 async def create_revision(
     data: RevisionCreate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
 ):
-    due = data.next_revision_date or (date.today() + timedelta(days=data.interval_days))
+    due = data.next_revision_date or first_revision_date()
     item = RevisionItem(
         user_id=current_user.id,
         topic=data.topic.strip(),
         subject=data.subject,
-        interval_days=data.interval_days,
+        interval_days=REVISION_FIRST_DAY,
         next_revision_date=due,
         notes=data.notes,
         priority=data.priority or "medium",
@@ -234,15 +239,7 @@ async def complete_revision(
     item.last_revised = today
     item.revision_count += 1
 
-    if item.interval_days == 1:
-        item.interval_days = 7
-        item.next_revision_date = today + timedelta(days=7)
-    elif item.interval_days == 7:
-        item.interval_days = 30
-        item.next_revision_date = today + timedelta(days=30)
-    else:
-        item.completed = True
-        item.completed_at = datetime.now(timezone.utc)
+    advance_revision_item(item, today)
 
     await _update_revision_streak(db, current_user.id)
     await db.flush()

@@ -238,7 +238,7 @@ class OverallAnalysisEngine:
                 "type": "revision",
                 "priority": "medium",
                 "title": "No revisions due today",
-                "message": "Add topics from today's study to the revision planner (1→7→30 day cycle).",
+                "message": "Add topics from today's study to the revision planner (Day 3 → 7 → 15 cycle).",
             })
 
         if syllabus["vh_total"] > syllabus["vh_done"]:
