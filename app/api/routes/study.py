@@ -72,12 +72,9 @@ async def create_session(
     return session
 
 
-@router.delete("/sessions/{session_id}", status_code=204)
-async def delete_session(
-    session_id: int,
-    current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
-):
+async def _delete_session_impl(
+    session_id: int, current_user: CurrentUser, db: AsyncSession
+) -> None:
     result = await db.execute(
         select(StudySession).where(
             StudySession.id == session_id, StudySession.user_id == current_user.id
@@ -87,13 +84,31 @@ async def delete_session(
     if not session:
         raise HTTPException(status_code=404, detail="Study session not found")
 
-    # Roll back awarded XP from this session.
     earned_xp = int(session.hours * 10) + (session.tasks_completed or 0) * 5
     current_user.xp = max(0, current_user.xp - earned_xp)
 
     await db.delete(session)
     await cache.delete(f"dashboard:stats:{current_user.id}")
     await db.flush()
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def delete_session(
+    session_id: int,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    await _delete_session_impl(session_id, current_user, db)
+
+
+@router.post("/sessions/{session_id}/delete", status_code=204)
+async def delete_session_post(
+    session_id: int,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """POST alias for environments that block DELETE."""
+    await _delete_session_impl(session_id, current_user, db)
 
 
 @router.get("/heatmap")

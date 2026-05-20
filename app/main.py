@@ -135,7 +135,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "service": "ssc-cgl-api"}
+    return {
+        "status": "healthy",
+        "service": "ssc-cgl-api",
+        "api_features": {
+            "study_session_delete": True,
+            "revision_management_v2": True,
+        },
+    }
 
 
 @app.get("/metrics/perf")
