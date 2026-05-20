@@ -4,6 +4,7 @@ from app.models.mock_test import MockTest
 from app.models.streak import Streak, Achievement
 from app.models.note import Note
 from app.models.revision import RevisionItem
+from app.models.revision_history import RevisionHistory
 from app.models.weak_area import WeakTopic
 from app.models.pyq import PYQProgress
 from app.models.quote import Quote
@@ -26,6 +27,7 @@ __all__ = [
     "Achievement",
     "Note",
     "RevisionItem",
+    "RevisionHistory",
     "WeakTopic",
     "PYQProgress",
     "Quote",

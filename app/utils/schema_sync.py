@@ -81,6 +81,20 @@ PATCHES = [
        AND COALESCE(gk_score, 0) > 0
        AND COALESCE(reasoning_score, 0) = 0 AND COALESCE(quant_score, 0) = 0 AND COALESCE(english_score, 0) = 0
        AND COALESCE(max_score, 200) <= 50""",
+    # Performance indexes (safe/idempotent)
+    "CREATE INDEX IF NOT EXISTS idx_mock_tests_user_date ON mock_tests (user_id, test_date DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_mock_tests_user_type_date ON mock_tests (user_id, test_type, test_date DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_calc_attempts_user_created ON calc_question_attempts (user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_calc_attempts_user_type ON calc_question_attempts (user_id, practice_type)",
+    "CREATE INDEX IF NOT EXISTS idx_streak_user_type ON streaks (user_id, streak_type)",
+    "CREATE INDEX IF NOT EXISTS idx_study_sessions_user_date ON study_sessions (user_id, date DESC)",
+    # Revision management extensions
+    "ALTER TABLE revision_items ADD COLUMN IF NOT EXISTS notes TEXT",
+    "ALTER TABLE revision_items ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'medium'",
+    "ALTER TABLE revision_items ADD COLUMN IF NOT EXISTS difficulty VARCHAR(20) DEFAULT 'medium'",
+    "ALTER TABLE revision_items ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS idx_revision_items_user_due ON revision_items (user_id, next_revision_date)",
+    "CREATE INDEX IF NOT EXISTS idx_revision_items_user_priority ON revision_items (user_id, priority)",
 ]
 
 

@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser
+from app.core.cache import cache
 from app.core.database import get_db
 from app.models.mock_test import MockTest
 from app.models.streak import Streak
@@ -105,12 +106,16 @@ async def list_mocks(
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
     limit: int = 50,
+    offset: int = 0,
     test_type: str | None = None,
 ):
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
     result = await db.execute(
         select(MockTest)
         .where(MockTest.user_id == current_user.id)
         .order_by(MockTest.test_date.desc())
+        .offset(offset)
         .limit(limit * 3 if test_type else limit)
     )
     rows = list(result.scalars().all())
@@ -213,26 +218,42 @@ async def _create_mock_impl(
         current_user.current_mock_score = total_score
         current_user.overall_accuracy = accuracy
 
-    if is_full:
-        streak_result = await db.execute(
-            select(Streak).where(Streak.user_id == current_user.id, Streak.streak_type == "mock")
-        )
-        streak = streak_result.scalar_one_or_none()
-        if not streak:
-            streak = Streak(user_id=current_user.id, streak_type="mock")
-            db.add(streak)
-        today = date.today()
-        if streak.last_activity_date != today:
-            if streak.last_activity_date == today - timedelta(days=1):
-                streak.current_count += 1
-            else:
-                streak.current_count = 1
-            streak.last_activity_date = today
-            streak.longest_count = max(streak.longest_count, streak.current_count)
+    streak_result = await db.execute(
+        select(Streak).where(Streak.user_id == current_user.id, Streak.streak_type == "mock")
+    )
+    streak = streak_result.scalar_one_or_none()
+    if not streak:
+        streak = Streak(user_id=current_user.id, streak_type="mock")
+        db.add(streak)
+    today = date.today()
+    if streak.last_activity_date != today:
+        if streak.last_activity_date == today - timedelta(days=1):
+            streak.current_count += 1
+        else:
+            streak.current_count = 1
+        streak.last_activity_date = today
+        streak.longest_count = max(streak.longest_count, streak.current_count)
+
+    # Treat mock activity as study engagement so dashboard streak remains meaningful.
+    study_streak_result = await db.execute(
+        select(Streak).where(Streak.user_id == current_user.id, Streak.streak_type == "study")
+    )
+    study_streak = study_streak_result.scalar_one_or_none()
+    if not study_streak:
+        study_streak = Streak(user_id=current_user.id, streak_type="study")
+        db.add(study_streak)
+    if study_streak.last_activity_date != today:
+        if study_streak.last_activity_date == today - timedelta(days=1):
+            study_streak.current_count += 1
+        else:
+            study_streak.current_count = 1
+        study_streak.last_activity_date = today
+        study_streak.longest_count = max(study_streak.longest_count, study_streak.current_count)
 
     await db.flush()
     await refresh_user_mock_scores(db, current_user)
     await sync_user_xp(db, current_user)
+    await cache.delete(f"dashboard:stats:{current_user.id}")
     await db.refresh(mock)
     return _mock_to_response(mock)
 
@@ -325,4 +346,5 @@ async def delete_mock(mock_id: int, current_user: CurrentUser, db: AsyncSession 
 
     # Refresh user mock aggregates from remaining full mocks only (incl. heuristic)
     await refresh_user_mock_scores(db, current_user)
+    await cache.delete(f"dashboard:stats:{current_user.id}")
     await db.flush()

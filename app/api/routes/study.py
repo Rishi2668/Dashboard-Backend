@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser
+from app.core.cache import cache
 from app.core.database import get_db
 from app.models.streak import Streak
 from app.models.study import DailyTarget, StudySession
@@ -66,8 +67,33 @@ async def create_session(
     await _update_study_streak(db, current_user.id)
     current_user.xp += int(data.hours * 10) + data.tasks_completed * 5
     await db.flush()
+    await cache.delete(f"dashboard:stats:{current_user.id}")
     await db.refresh(session)
     return session
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def delete_session(
+    session_id: int,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(StudySession).where(
+            StudySession.id == session_id, StudySession.user_id == current_user.id
+        )
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Study session not found")
+
+    # Roll back awarded XP from this session.
+    earned_xp = int(session.hours * 10) + (session.tasks_completed or 0) * 5
+    current_user.xp = max(0, current_user.xp - earned_xp)
+
+    await db.delete(session)
+    await cache.delete(f"dashboard:stats:{current_user.id}")
+    await db.flush()
 
 
 @router.get("/heatmap")
@@ -127,6 +153,7 @@ async def update_target(
     if data.completed:
         current_user.xp += 15
     await db.flush()
+    await cache.delete(f"dashboard:stats:{current_user.id}")
     await db.refresh(target)
     return target
 
@@ -140,3 +167,4 @@ async def delete_target(target_id: int, current_user: CurrentUser, db: AsyncSess
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
     await db.delete(target)
+    await cache.delete(f"dashboard:stats:{current_user.id}")

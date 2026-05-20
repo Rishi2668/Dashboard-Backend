@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser
+from app.core.cache import cache
 from app.core.database import get_db
 from app.models.calc_practice import (
     CalcPendingQuestion,
@@ -34,7 +35,7 @@ from app.services.calc_question_generator import (
     validate_user_answer,
     _round_answer,
 )
-from app.utils.db_dates import created_on
+from app.utils.db_dates import created_since
 from app.utils.sql_helpers import sum_correct
 
 router = APIRouter(prefix="/calc-practice", tags=["calc-practice"])
@@ -354,6 +355,7 @@ async def submit_attempt(
         explanation=explanation,
         correct_answer=ans,
         display_answer=display,
+        session=_session_response(session),
     )
 
 
@@ -439,6 +441,10 @@ async def end_session(
 
 @router.get("/analytics", response_model=CalcAnalyticsResponse)
 async def get_analytics(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    cache_key = f"calc:analytics:{current_user.id}"
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
     total_q = await db.execute(
         select(func.count(CalcQuestionAttempt.id)).where(
             CalcQuestionAttempt.user_id == current_user.id
@@ -529,27 +535,27 @@ async def get_analytics(current_user: CurrentUser, db: AsyncSession = Depends(ge
     weak_areas.sort(key=lambda x: x["accuracy_pct"])
 
     daily = []
+    start_day = date.today() - timedelta(days=6)
+    daily_result = await db.execute(
+        select(
+            func.date(CalcQuestionAttempt.created_at).label("d"),
+            func.count(CalcQuestionAttempt.id).label("cnt"),
+            sum_correct(CalcQuestionAttempt.is_correct).label("cor"),
+        )
+        .where(
+            CalcQuestionAttempt.user_id == current_user.id,
+            created_since(CalcQuestionAttempt.created_at, start_day),
+        )
+        .group_by(func.date(CalcQuestionAttempt.created_at))
+    )
+    daily_map = {
+        str(row.d): (int(row.cnt or 0), int(row.cor or 0))
+        for row in daily_result.all()
+    }
     for i in range(6, -1, -1):
         d = date.today() - timedelta(days=i)
-        day_result = await db.execute(
-            select(
-                func.count(CalcQuestionAttempt.id),
-                sum_correct(CalcQuestionAttempt.is_correct),
-            ).where(
-                CalcQuestionAttempt.user_id == current_user.id,
-                created_on(CalcQuestionAttempt.created_at, d),
-            )
-        )
-        dr = day_result.one()
-        cnt = dr[0] or 0
-        cor = int(dr[1] or 0)
-        daily.append(
-            {
-                "date": d.isoformat(),
-                "questions": cnt,
-                "accuracy_pct": round(cor / cnt * 100, 1) if cnt else 0,
-            }
-        )
+        cnt, cor = daily_map.get(d.isoformat(), (0, 0))
+        daily.append({"date": d.isoformat(), "questions": cnt, "accuracy_pct": round(cor / cnt * 100, 1) if cnt else 0})
 
     tq = total_q.scalar() or 0
     tc = total_correct.scalar() or 0
@@ -561,7 +567,7 @@ async def get_analytics(current_user: CurrentUser, db: AsyncSession = Depends(ge
     if calc_streak >= 7:
         badges.append({"id": "week_streak", "title": "7-Day Calc Streak", "earned": True})
 
-    return CalcAnalyticsResponse(
+    payload = CalcAnalyticsResponse(
         total_questions=tq,
         total_correct=tc,
         accuracy_pct=round(tc / tq * 100, 1) if tq else 0,
@@ -575,9 +581,17 @@ async def get_analytics(current_user: CurrentUser, db: AsyncSession = Depends(ge
         daily_last_7=daily,
         badges=badges,
     )
+    await cache.set(cache_key, payload, ttl_sec=20)
+    return payload
 
 
 @router.get("/ai-insights", response_model=list[CalcAIInsight])
 async def ai_insights(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    cache_key = f"calc:ai:{current_user.id}"
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
     engine = CalcAIEngine()
-    return await engine.generate_insights(db, current_user)
+    insights = await engine.generate_insights(db, current_user)
+    await cache.set(cache_key, insights, ttl_sec=60)
+    return insights

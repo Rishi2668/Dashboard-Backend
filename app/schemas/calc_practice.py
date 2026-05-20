@@ -83,6 +83,7 @@ class AttemptResponse(BaseModel):
     explanation: str
     correct_answer: float
     display_answer: str
+    session: SessionResponse
 
     model_config = {"from_attributes": True}
 

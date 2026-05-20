@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser
+from app.core.cache import cache
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.models.mock_test import MockTest
 from app.models.streak import Achievement, Streak
 from app.models.study import StudySession
 from app.models.user import User
@@ -38,6 +40,10 @@ async def _ensure_streaks(db: AsyncSession, user_id: int) -> list[Streak]:
 
 @router.get("/stats", response_model=DashboardStats)
 async def get_dashboard_stats(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    cache_key = f"dashboard:stats:{current_user.id}"
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
     settings = get_settings()
     exam_date = current_user.exam_date
     if not exam_date:
@@ -70,7 +76,25 @@ async def get_dashboard_stats(current_user: CurrentUser, db: AsyncSession = Depe
         .where(StudySession.user_id == current_user.id, StudySession.date >= month_start)
         .group_by(StudySession.date)
     )
-    heatmap_data = [{"date": str(r.date), "hours": float(r.hours)} for r in heatmap_result.all()]
+    heatmap_hours_by_date: dict[date, float] = {
+        r.date: float(r.hours) for r in heatmap_result.all()
+    }
+
+    # Include mock/full/sectional activity in the heatmap as engagement.
+    mock_days_result = await db.execute(
+        select(MockTest.test_date, func.count(MockTest.id).label("count"))
+        .where(MockTest.user_id == current_user.id, MockTest.test_date >= month_start)
+        .group_by(MockTest.test_date)
+    )
+    for row in mock_days_result.all():
+        heatmap_hours_by_date[row.test_date] = heatmap_hours_by_date.get(row.test_date, 0.0) + float(
+            row.count
+        )
+
+    heatmap_data = [
+        {"date": str(day), "hours": hours}
+        for day, hours in sorted(heatmap_hours_by_date.items(), key=lambda x: x[0])
+    ]
 
     active_days = len(heatmap_data)
     month_consistency = round((active_days / 30) * 100, 1)
@@ -90,7 +114,7 @@ async def get_dashboard_stats(current_user: CurrentUser, db: AsyncSession = Depe
     await refresh_user_mock_scores(db, user_loaded)
     target_analytics = await TargetScoreService().build_analytics(db, user_loaded)
 
-    return DashboardStats(
+    payload = DashboardStats(
         user=UserResponse.model_validate(current_user),
         days_left=days_left,
         study_streak=study_streak.current_count if study_streak else 0,
@@ -112,3 +136,5 @@ async def get_dashboard_stats(current_user: CurrentUser, db: AsyncSession = Depe
         streaks=[StreakResponse.model_validate(s) for s in streaks],
         target_analytics=target_analytics,
     )
+    await cache.set(cache_key, payload, ttl_sec=30)
+    return payload
