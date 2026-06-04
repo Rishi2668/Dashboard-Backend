@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser
+from app.core.cache import invalidate_dashboard_stats_cache
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.score_target import ScoreTargetResponse, ScoreTargetUpdate, TargetAnalyticsResponse
@@ -42,6 +43,7 @@ async def update_targets(
     current_user.target_marks = data.overall_target_marks
     await db.flush()
     await db.refresh(t)
+    await invalidate_dashboard_stats_cache(current_user.id)
     return ScoreTargetResponse.model_validate(t)
 
 

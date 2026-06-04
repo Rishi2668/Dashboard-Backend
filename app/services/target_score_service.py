@@ -10,7 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.mock_test import MockTest
 from app.models.score_target import UserScoreTarget
 from app.models.user import User
-from app.services.mock_classification import filter_mocks_by_type
+from app.services.mock_classification import (
+    FULL_MOCK_MIN_MAX_SCORE,
+    active_subjects,
+    ensure_mock_classification,
+    filter_mocks_by_type,
+    is_full_mock,
+    primary_subject,
+)
+from app.services.mock_reclassify import reclassify_user_mocks
 from app.schemas.score_target import (
     OverallTargetComparison,
     ScoreTargetResponse,
@@ -68,9 +76,42 @@ async def _full_mocks(db: AsyncSession, user_id: int, limit: int = 50) -> list[M
     return filter_mocks_by_type(rows, "full")[:limit]
 
 
+def _resolve_latest_full_mock(mocks: list[MockTest]) -> MockTest | None:
+    """Newest row usable for full-mock target comparison (reclassifies in memory)."""
+    for m in mocks:
+        ensure_mock_classification(m)
+
+    dated = sorted(mocks, key=lambda m: (m.test_date, m.id), reverse=True)
+    for m in dated:
+        if is_full_mock(m):
+            return m
+
+    # Mis-tagged rows: multiple subjects or clearly full-length paper
+    for m in dated:
+        active = active_subjects(m)
+        if len(active) >= 2:
+            ms = float(m.max_score or 0)
+            ts = float(m.total_score or 0)
+            if ms >= FULL_MOCK_MIN_MAX_SCORE or ts >= 80:
+                return m
+    return None
+
+
 async def _latest_mock(db: AsyncSession, user_id: int) -> MockTest | None:
-    full = await _full_mocks(db, user_id, 1)
-    return full[0] if full else None
+    rows = await _fetch_mocks(db, user_id, 120)
+    return _resolve_latest_full_mock(rows)
+
+
+def _latest_sectional_by_subject(mocks: list[MockTest]) -> dict[str, MockTest]:
+    """Most recent sectional per subject (when no full mock for dashboard)."""
+    sectionals = [m for m in mocks if not is_full_mock(m)]
+    dated = sorted(sectionals, key=lambda m: (m.test_date, m.id), reverse=True)
+    by_key: dict[str, MockTest] = {}
+    for m in dated:
+        key = getattr(m, "section_subject", None) or primary_subject(m)
+        if key and key not in by_key:
+            by_key[key] = m
+    return by_key
 
 
 async def _recent_mocks(db: AsyncSession, user_id: int, limit: int = 10) -> list[MockTest]:
@@ -108,12 +149,22 @@ class TargetScoreService:
         targets: UserScoreTarget | None = None,
         latest_full: MockTest | None = None,
     ) -> TargetAnalyticsResponse:
+        await reclassify_user_mocks(db, user.id)
         t = targets or await get_or_create_targets(db, user)
-        latest = latest_full if latest_full is not None else await _latest_mock(db, user.id)
+        all_mocks = await _fetch_mocks(db, user.id, 120)
+        latest = (
+            latest_full
+            if latest_full is not None
+            else _resolve_latest_full_mock(all_mocks)
+        )
+        sectional_latest = _latest_sectional_by_subject(all_mocks) if not latest else {}
 
         if latest:
-            actual_overall = latest.total_score
-            actual_max = latest.max_score
+            actual_overall = float(latest.total_score or 0)
+            actual_max = float(latest.max_score or t.overall_max_marks)
+        elif float(user.current_mock_score or 0) > 0:
+            actual_overall = float(user.current_mock_score)
+            actual_max = float(t.overall_max_marks)
         else:
             actual_overall = 0.0
             actual_max = t.overall_max_marks
@@ -136,8 +187,12 @@ class TargetScoreService:
             t_max = getattr(t, max_attr)
             t_tgt = getattr(t, target_attr)
             if latest:
-                actual = getattr(latest, score_attr)
-                a_max = getattr(latest, f"{key}_max_marks", t_max)
+                actual = float(getattr(latest, score_attr) or 0)
+                a_max = float(getattr(latest, f"{key}_max_marks", t_max) or t_max)
+            elif key in sectional_latest:
+                sm = sectional_latest[key]
+                actual = float(sm.total_score or getattr(sm, score_attr) or 0)
+                a_max = float(sm.max_score or getattr(sm, f"{key}_max_marks", t_max) or t_max)
             else:
                 actual = 0.0
                 a_max = t_max
@@ -156,6 +211,15 @@ class TargetScoreService:
             subjects, overall, closest, biggest, weekly, mocks
         )
 
+        ref_mock = latest
+        if not ref_mock and sectional_latest:
+            ref_mock = max(sectional_latest.values(), key=lambda m: (m.test_date, m.id))
+        has_data = (
+            latest is not None
+            or float(user.current_mock_score or 0) > 0
+            or len(sectional_latest) > 0
+        )
+
         return TargetAnalyticsResponse(
             targets=_targets_response(t),
             overall=overall,
@@ -167,8 +231,8 @@ class TargetScoreService:
             monthly_improvement=monthly_imp,
             score_prediction=prediction,
             ai_insights=insights,
-            has_mock_data=latest is not None,
-            latest_mock_date=str(latest.test_date) if latest else None,
+            has_mock_data=has_data,
+            latest_mock_date=str(ref_mock.test_date) if ref_mock else None,
         )
 
     async def _weekly_trend(
