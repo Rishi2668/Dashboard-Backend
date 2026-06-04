@@ -84,6 +84,7 @@ def _mock_to_response(mock: MockTest) -> MockTestResponse:
         test_name=mock.test_name,
         test_date=mock.test_date,
         test_type=mock.test_type or "full",
+        section_subject=getattr(mock, "section_subject", None),
         total_score=mock.total_score,
         max_score=mock.max_score,
         total_questions=mock.total_questions,
@@ -200,6 +201,16 @@ async def _create_mock_impl(
     )
     for key in SUBJECT_KEYS:
         _apply_section(mock, key, sections[key])
+
+    if final_section and final_type == "sectional":
+        active = sections[final_section]
+        mock.total_score = float(active["secured_marks"])
+        mock.max_score = float(active["max_marks"])
+        mock.accuracy = float(active["accuracy"])
+        mock.attempted = int(active["attempted"])
+        mock.correct = int(active["correct"])
+        mock.wrong = int(active["wrong"])
+        mock.total_questions = int(active["total_questions"])
 
     if data.test_type == "full" or max_score >= FULL_MOCK_MIN_MAX_SCORE:
         mock.test_type = "full"

@@ -85,6 +85,22 @@ def classify_from_sections(sections: dict[str, dict]) -> tuple[str, str | None]:
     return "full", None
 
 
+def _sync_sectional_totals(mock: MockTest) -> None:
+    """Keep per-subject columns aligned with row totals for single-subject sectionals."""
+    key = getattr(mock, "section_subject", None) or primary_subject(mock)
+    if not key or key not in SUBJECT_KEYS:
+        return
+    total = float(mock.total_score or 0)
+    max_m = float(mock.max_score or 0)
+    if total <= 0 and max_m <= 0:
+        return
+    setattr(mock, f"{key}_score", total)
+    if max_m > 0:
+        setattr(mock, f"{key}_max_marks", max_m)
+    if mock.accuracy is not None:
+        setattr(mock, f"{key}_accuracy", float(mock.accuracy))
+
+
 def ensure_mock_classification(mock: MockTest) -> None:
     """Persist correct test_type / section_subject on the model before save."""
     if float(mock.max_score or 0) >= FULL_MOCK_MIN_MAX_SCORE:
@@ -95,6 +111,7 @@ def ensure_mock_classification(mock: MockTest) -> None:
         mock.test_type = "sectional"
         if not getattr(mock, "section_subject", None):
             mock.section_subject = primary_subject(mock)
+        _sync_sectional_totals(mock)
     else:
         mock.test_type = "full"
         mock.section_subject = None

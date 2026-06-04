@@ -171,7 +171,8 @@ async def perf_metrics():
     }
 
 
-@app.post("/api/v1/metrics/web-vitals")
+@app.post("/api/v1/perf/cwv")
+@app.post("/api/v1/metrics/web-vitals", include_in_schema=False)
 async def web_vitals_ingest(payload: dict):
     _perf_metrics["web_vitals_events"] += 1
     logger.info("WebVitals %s", payload)

@@ -78,6 +78,7 @@ class MockTestResponse(BaseModel):
     test_name: Optional[str]
     test_date: date
     test_type: str
+    section_subject: Optional[str] = None
     total_score: float
     max_score: float
     total_questions: int

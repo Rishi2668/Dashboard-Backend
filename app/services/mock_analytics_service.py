@@ -43,17 +43,20 @@ def _build_subject_targets(
         return []
     by_subject: dict[str, list[MockTest]] = {k: [] for k in SUBJECT_KEYS}
     for m in mocks:
-        key = primary_subject(m)
+        key = primary_subject(m) or getattr(m, "section_subject", None)
         if key:
             by_subject[key].append(m)
 
     rows: list[SectionalSubjectTarget] = []
     for subj in target_data.subjects:
-        series = by_subject.get(subj.key, [])
+        series = sorted(
+            by_subject.get(subj.key, []),
+            key=lambda m: (m.test_date, m.id),
+        )
         if series:
             last = series[-1]
-            actual = getattr(last, f"{subj.key}_score", 0)
-            actual_max = getattr(last, f"{subj.key}_max_marks", subj.target_max)
+            actual = float(last.total_score or getattr(last, f"{subj.key}_score", 0))
+            actual_max = float(last.max_score or getattr(last, f"{subj.key}_max_marks", subj.target_max))
             has_data = True
             count = len(series)
         else:
@@ -271,23 +274,30 @@ def _build_sectional_analytics(
 
     subject_stats: dict[str, list[float]] = {k: [] for k in SUBJECT_KEYS}
     subject_accuracy_trends: dict[str, list] = {k: [] for k in SUBJECT_KEYS}
+    by_subject_attempts: dict[str, list[MockTest]] = {k: [] for k in SUBJECT_KEYS}
     for m in mocks:
-        key = primary_subject(m)
-        if not key:
+        key = primary_subject(m) or getattr(m, "section_subject", None)
+        if not key or key not in SUBJECT_KEYS:
             continue
-        acc = getattr(m, f"{key}_accuracy", 0)
-        sc = getattr(m, f"{key}_score", 0)
-        mx = getattr(m, f"{key}_max_marks", 50)
-        subject_stats[key].append(acc)
-        subject_accuracy_trends[key].append(
-            {
-                "date": str(m.test_date),
-                "accuracy": acc,
-                "score": sc,
-                "max_score": mx,
-                "name": m.test_name or "",
-            }
-        )
+        by_subject_attempts[key].append(m)
+
+    for key in SUBJECT_KEYS:
+        series = sorted(by_subject_attempts[key], key=lambda m: (m.test_date, m.id))
+        for idx, m in enumerate(series):
+            sc, mx, acc = _sectional_score(m)
+            title = (m.test_name or "").strip()
+            subject_stats[key].append(acc)
+            subject_accuracy_trends[key].append(
+                {
+                    "date": str(m.test_date),
+                    "accuracy": acc,
+                    "score": sc,
+                    "max_score": mx,
+                    "name": title,
+                    "mock_id": m.id,
+                    "attempt": idx + 1,
+                }
+            )
 
     section_comparison = []
     subject_targets = _build_subject_targets(mocks, target_data)
