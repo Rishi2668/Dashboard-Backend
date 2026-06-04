@@ -48,7 +48,7 @@ cache = TTLCache()
 
 
 def dashboard_stats_cache_key(user_id: int) -> str:
-    return f"dashboard:stats:v2:{user_id}"
+    return f"dashboard:stats:v3:{user_id}"
 
 
 async def invalidate_dashboard_stats_cache(user_id: int) -> None:

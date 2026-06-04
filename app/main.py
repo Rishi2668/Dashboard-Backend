@@ -141,6 +141,9 @@ async def health():
         "api_features": {
             "study_session_delete": True,
             "revision_management_v2": True,
+            "notes_api": True,
+            "perf_cwv": True,
+            "target_analytics_v3": True,
         },
     }
 
