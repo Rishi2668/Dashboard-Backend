@@ -88,6 +88,12 @@ PATCHES = [
     "CREATE INDEX IF NOT EXISTS idx_calc_attempts_user_type ON calc_question_attempts (user_id, practice_type)",
     "CREATE INDEX IF NOT EXISTS idx_streak_user_type ON streaks (user_id, streak_type)",
     "CREATE INDEX IF NOT EXISTS idx_study_sessions_user_date ON study_sessions (user_id, date DESC)",
+    # Notes & mistake journal
+    "ALTER TABLE notes ADD COLUMN IF NOT EXISTS note_type VARCHAR(50) DEFAULT 'general'",
+    "ALTER TABLE notes ADD COLUMN IF NOT EXISTS tags VARCHAR(500)",
+    "ALTER TABLE notes ADD COLUMN IF NOT EXISTS is_mistake BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE notes ADD COLUMN IF NOT EXISTS subject VARCHAR(50)",
+    "CREATE INDEX IF NOT EXISTS idx_notes_user_updated ON notes (user_id, updated_at DESC)",
     # Revision management extensions
     "ALTER TABLE revision_items ADD COLUMN IF NOT EXISTS notes TEXT",
     "ALTER TABLE revision_items ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'medium'",
