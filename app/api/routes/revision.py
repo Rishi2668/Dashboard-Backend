@@ -84,7 +84,7 @@ async def revision_dashboard(current_user: CurrentUser, db: AsyncSession = Depen
     if cached is not None:
         return cached
     payload = await build_dashboard_summary(db, current_user.id)
-    await cache.set(key, payload, ttl_sec=20)
+    await cache.set(key, payload, ttl_sec=60)
     return payload
 
 

@@ -137,5 +137,5 @@ async def get_dashboard_stats(current_user: CurrentUser, db: AsyncSession = Depe
         target_analytics=target_analytics,
         api_features=ApiFeatures(),
     )
-    await cache.set(cache_key, payload, ttl_sec=30)
+    await cache.set(cache_key, payload, ttl_sec=90)
     return payload
