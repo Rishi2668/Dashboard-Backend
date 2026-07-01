@@ -6,6 +6,7 @@ from app.api.routes import (
     calc_practice,
     dashboard,
     perf,
+    roadmap_2026,
     score_targets,
     mock_tests,
     notes,
@@ -31,4 +32,5 @@ api_router.include_router(quotes.router)
 api_router.include_router(pyq.router)
 api_router.include_router(syllabus.router)
 api_router.include_router(calc_practice.router)
+api_router.include_router(roadmap_2026.router)
 api_router.include_router(perf.router)

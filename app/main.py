@@ -53,6 +53,9 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as db:
         await seed_quotes(db)
         await seed_syllabus(db)
+        from app.utils.sync_roadmap_chapters import sync_roadmap_chapters
+
+        await sync_roadmap_chapters(db)
         await db.commit()
     logger.info("Application started")
     yield
@@ -172,6 +175,11 @@ async def perf_metrics():
         "web_vitals_events": int(_perf_metrics["web_vitals_events"] or 0),
         "top_slowest_paths": top,
     }
+
+
+@app.get("/api/v1/perf/cwv", include_in_schema=False)
+async def web_vitals_probe():
+    return {"ok": True, "endpoint": "cwv"}
 
 
 @app.post("/api/v1/perf/cwv")

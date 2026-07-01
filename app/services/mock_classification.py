@@ -71,6 +71,54 @@ def primary_subject(mock: MockTest) -> str | None:
     return active[0] if len(active) == 1 else None
 
 
+_NAME_HINTS: dict[str, tuple[str, ...]] = {
+    "reasoning": ("reasoning", "gi ", "intelligence", "logical"),
+    "quant": ("quant", "quantitative", "math", "arithmetic", "numer"),
+    "english": ("english", "comprehension", "grammar"),
+    "gk": ("gk", "general awareness", "awareness", "gs ", "polity", "history"),
+}
+
+
+def infer_section_subject(mock: MockTest) -> str | None:
+    """Resolve subject for sectionals (legacy rows may only have total_score)."""
+    section = getattr(mock, "section_subject", None)
+    if section in SUBJECT_KEYS:
+        return section
+
+    key = primary_subject(mock)
+    if key:
+        return key
+
+    total = float(mock.total_score or 0)
+    if total <= 0:
+        return None
+
+    for k in SUBJECT_KEYS:
+        sc = _subject_score(mock, k)
+        if sc > 0 and abs(sc - total) < 0.02:
+            return k
+
+    nonzero = [k for k in SUBJECT_KEYS if _subject_score(mock, k) > 0]
+    if len(nonzero) == 1:
+        return nonzero[0]
+
+    name = (mock.test_name or "").lower()
+    for k, hints in _NAME_HINTS.items():
+        if any(h in name for h in hints):
+            return k
+
+    if float(mock.max_score or 0) <= 50 or (mock.test_type or "") == "sectional":
+        for k in SUBJECT_KEYS:
+            if _subject_attempted(mock, k) > 0:
+                return k
+        # Last resort: only one subject column has max_marks set for a 50-mark paper
+        with_max = [k for k in SUBJECT_KEYS if float(getattr(mock, f"{k}_max_marks", 0) or 0) >= 40]
+        if len(with_max) == 1:
+            return with_max[0]
+
+    return None
+
+
 def classify_from_sections(sections: dict[str, dict]) -> tuple[str, str | None]:
     """Return (test_type, section_subject) from finalized section dicts."""
     active = [
@@ -87,7 +135,7 @@ def classify_from_sections(sections: dict[str, dict]) -> tuple[str, str | None]:
 
 def _sync_sectional_totals(mock: MockTest) -> None:
     """Keep per-subject columns aligned with row totals for single-subject sectionals."""
-    key = getattr(mock, "section_subject", None) or primary_subject(mock)
+    key = infer_section_subject(mock)
     if not key or key not in SUBJECT_KEYS:
         return
     total = float(mock.total_score or 0)
@@ -109,8 +157,9 @@ def ensure_mock_classification(mock: MockTest) -> None:
         return
     if is_sectional_mock(mock):
         mock.test_type = "sectional"
-        if not getattr(mock, "section_subject", None):
-            mock.section_subject = primary_subject(mock)
+        inferred = infer_section_subject(mock)
+        if inferred:
+            mock.section_subject = inferred
         _sync_sectional_totals(mock)
     else:
         mock.test_type = "full"

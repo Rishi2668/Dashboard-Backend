@@ -16,6 +16,7 @@ from app.models.calc_practice import (
     CalcQuestionAttempt,
     CalcWeakAreaStat,
 )
+from app.models.roadmap_task import UserRoadmapTaskProgress
 from app.models.score_target import UserScoreTarget
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "CalcWeakAreaStat",
     "CalcPendingQuestion",
     "UserScoreTarget",
+    "UserRoadmapTaskProgress",
 ]

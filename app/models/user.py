@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from app.models.syllabus import UserChapterProgress
     from app.models.calc_practice import CalcPracticeSession, CalcQuestionAttempt, CalcWeakAreaStat
     from app.models.score_target import UserScoreTarget
+    from app.models.roadmap_task import UserRoadmapTaskProgress
 
 
 class User(Base):
@@ -69,4 +70,7 @@ class User(Base):
     )
     score_target: Mapped[Optional["UserScoreTarget"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+    roadmap_tasks: Mapped[List["UserRoadmapTaskProgress"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
     )

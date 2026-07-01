@@ -15,8 +15,8 @@ from app.services.mock_classification import (
     active_subjects,
     ensure_mock_classification,
     filter_mocks_by_type,
+    infer_section_subject,
     is_full_mock,
-    primary_subject,
 )
 from app.services.mock_reclassify import reclassify_user_mocks
 from app.schemas.score_target import (
@@ -104,14 +104,25 @@ async def _latest_mock(db: AsyncSession, user_id: int) -> MockTest | None:
 
 def _latest_sectional_by_subject(mocks: list[MockTest]) -> dict[str, MockTest]:
     """Most recent sectional per subject (when no full mock for dashboard)."""
-    sectionals = [m for m in mocks if not is_full_mock(m)]
+    for m in mocks:
+        ensure_mock_classification(m)
+
+    sectionals = [m for m in mocks if not is_full_mock(m) and float(m.total_score or 0) > 0]
     dated = sorted(sectionals, key=lambda m: (m.test_date, m.id), reverse=True)
     by_key: dict[str, MockTest] = {}
     for m in dated:
-        key = getattr(m, "section_subject", None) or primary_subject(m)
+        key = infer_section_subject(m)
         if key and key not in by_key:
             by_key[key] = m
     return by_key
+
+
+def _sectional_actual(mock: MockTest, key: str, score_attr: str) -> float:
+    """Marks for one subject from a sectional row."""
+    inferred = infer_section_subject(mock)
+    if inferred == key:
+        return float(mock.total_score or getattr(mock, score_attr) or 0)
+    return float(getattr(mock, score_attr) or 0)
 
 
 async def _recent_mocks(db: AsyncSession, user_id: int, limit: int = 10) -> list[MockTest]:
@@ -159,9 +170,28 @@ class TargetScoreService:
         )
         sectional_latest = _latest_sectional_by_subject(all_mocks) if not latest else {}
 
+        subjects: list[SubjectTargetComparison] = []
+        for key, label, score_attr, max_attr, target_attr in SUBJECTS:
+            t_max = getattr(t, max_attr)
+            t_tgt = getattr(t, target_attr)
+            if latest:
+                actual = float(getattr(latest, score_attr) or 0)
+                a_max = float(getattr(latest, f"{key}_max_marks", t_max) or t_max)
+            elif key in sectional_latest:
+                sm = sectional_latest[key]
+                actual = _sectional_actual(sm, key, score_attr)
+                a_max = float(sm.max_score or getattr(sm, f"{key}_max_marks", t_max) or t_max)
+            else:
+                actual = 0.0
+                a_max = t_max
+            subjects.append(_subject_comparison(key, label, actual, a_max, t_tgt, t_max))
+
         if latest:
             actual_overall = float(latest.total_score or 0)
             actual_max = float(latest.max_score or t.overall_max_marks)
+        elif sectional_latest:
+            actual_overall = round(sum(s.actual for s in subjects), 1)
+            actual_max = round(sum(s.target_max for s in subjects), 1) or float(t.overall_max_marks)
         elif float(user.current_mock_score or 0) > 0:
             actual_overall = float(user.current_mock_score)
             actual_max = float(t.overall_max_marks)
@@ -181,22 +211,6 @@ class TargetScoreService:
             target_progress_pct=_pct(actual_overall, overall_target),
             improvement_needed=overall_gap,
         )
-
-        subjects: list[SubjectTargetComparison] = []
-        for key, label, score_attr, max_attr, target_attr in SUBJECTS:
-            t_max = getattr(t, max_attr)
-            t_tgt = getattr(t, target_attr)
-            if latest:
-                actual = float(getattr(latest, score_attr) or 0)
-                a_max = float(getattr(latest, f"{key}_max_marks", t_max) or t_max)
-            elif key in sectional_latest:
-                sm = sectional_latest[key]
-                actual = float(sm.total_score or getattr(sm, score_attr) or 0)
-                a_max = float(sm.max_score or getattr(sm, f"{key}_max_marks", t_max) or t_max)
-            else:
-                actual = 0.0
-                a_max = t_max
-            subjects.append(_subject_comparison(key, label, actual, a_max, t_tgt, t_max))
 
         closest = min(subjects, key=lambda s: s.gap) if subjects else None
         biggest = max(subjects, key=lambda s: s.gap) if subjects else None
