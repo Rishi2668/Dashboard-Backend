@@ -29,15 +29,25 @@ class RoadmapTaskOut(BaseModel):
     notes: Optional[str] = None
 
 
+class DailyVocabDayOut(BaseModel):
+    key: str
+    label: str
+    completed: bool = False
+
+
 class RoadmapWeekOut(BaseModel):
     number: int
     phase: int
     label: str
     start: str
     end: str
+    english_phase: Optional[int] = None
+    english_phase_name: Optional[str] = None
+    english_phase_note: Optional[str] = None
     sections: list[RoadmapSectionOut]
     virtual_tasks: list[RoadmapTaskOut]
     mock_tasks: list[RoadmapTaskOut]
+    daily_vocab: list[DailyVocabDayOut] = []
     completion_pct: float
     completed_count: int
     total_count: int
@@ -72,6 +82,8 @@ class Roadmap2026Out(BaseModel):
     hours_studied: float
     completion_streak: int
     counters: dict
+    english_roadmap: dict
+    vocab_streak: dict
     productivity: dict
     analytics: dict
 

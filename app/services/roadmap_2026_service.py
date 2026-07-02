@@ -11,6 +11,9 @@ from sqlalchemy.orm import selectinload
 from app.data.roadmap_2026 import (
     CHAPTER_ALIASES,
     DAILY_SCHEDULE,
+    DAILY_VOCAB_DAYS,
+    ENGLISH_DAILY_BLOCK,
+    ENGLISH_PHASES,
     EXAM_LABEL,
     MOCK_TASKS,
     PHASES,
@@ -131,9 +134,18 @@ class Roadmap2026Service:
                 "notes": t.notes if t else None,
             }
 
+        def daily_vocab_item(week_num: int, key: str, label: str) -> dict:
+            t = tasks_by_key.get((week_num, key))
+            return {
+                "key": key,
+                "label": label,
+                "completed": bool(t.completed) if t else False,
+            }
+
         weeks_out = []
         all_topic_items: list[dict] = []
         all_task_items: list[dict] = []
+        all_vocab_days: list[dict] = []
 
         for w in WEEKS:
             sections = []
@@ -148,14 +160,26 @@ class Roadmap2026Service:
 
             virtual = [virtual_item(w["number"], lbl) for lbl in w.get("virtual", [])]
             mocks = [mock_item(w["number"], spec) for spec in MOCK_TASKS]
+            daily_vocab = [
+                daily_vocab_item(w["number"], key, label) for key, label in DAILY_VOCAB_DAYS
+            ]
+            all_vocab_days.extend(daily_vocab)
 
-            week_total = len(week_topics) + len(virtual) + len([m for m in mocks if m["required"]])
+            week_total = (
+                len(week_topics)
+                + len(virtual)
+                + len([m for m in mocks if m["required"]])
+                + len(daily_vocab)
+            )
             week_done = sum(1 for t in week_topics if t["completed"])
             week_done += sum(1 for v in virtual if v["completed"])
             week_done += sum(1 for m in mocks if m["required"] and m["completed"])
+            week_done += sum(1 for d in daily_vocab if d["completed"])
 
             all_topic_items.extend(week_topics)
             all_task_items.extend(virtual + mocks)
+
+            eng_phase = next((p for p in ENGLISH_PHASES if p["id"] == w.get("english_phase")), None)
 
             weeks_out.append(
                 {
@@ -164,9 +188,13 @@ class Roadmap2026Service:
                     "label": w["label"],
                     "start": w["start"],
                     "end": w["end"],
+                    "english_phase": w.get("english_phase"),
+                    "english_phase_name": eng_phase["name"] if eng_phase else None,
+                    "english_phase_note": w.get("english_phase_note"),
                     "sections": sections,
                     "virtual_tasks": virtual,
                     "mock_tasks": mocks,
+                    "daily_vocab": daily_vocab,
                     "completion_pct": round(week_done / week_total * 100, 1) if week_total else 0,
                     "completed_count": week_done,
                     "total_count": week_total,
@@ -218,11 +246,8 @@ class Roadmap2026Service:
         )
 
         # Counters
-        vocab_done = sum(
-            1
-            for t in all_topic_items
-            if "vocab" in t["label"].lower() and t["completed"]
-        )
+        vocab_done = sum(1 for d in all_vocab_days if d["completed"])
+        vocab_total = len(all_vocab_days)
         pyq_result = await db.execute(
             select(func.coalesce(func.sum(PYQProgress.completed_questions), 0)).where(
                 PYQProgress.user_id == user.id
@@ -248,6 +273,10 @@ class Roadmap2026Service:
 
         analytics = await self._analytics(db, user, weeks_out, mocks_in_range, hours_studied)
 
+        current_week_num = _current_week_number(today)
+        english_roadmap = self._english_roadmap(weeks_out, all_topic_items, tasks_by_key, current_week_num)
+        vocab_streak = self._vocab_streak(weeks_out, current_week_num, today)
+
         return {
             "exam_label": EXAM_LABEL,
             "roadmap_start": str(ROADMAP_START),
@@ -266,9 +295,12 @@ class Roadmap2026Service:
             "completion_streak": streak,
             "counters": {
                 "vocabulary": vocab_done,
+                "vocabulary_total": vocab_total,
                 "formula_revision": formula_done,
                 "pyq": pyq_count,
             },
+            "english_roadmap": english_roadmap,
+            "vocab_streak": vocab_streak,
             "productivity": productivity,
             "analytics": analytics,
         }
@@ -338,7 +370,20 @@ class Roadmap2026Service:
     ) -> dict:
         current = next((w for w in weeks if w["number"] == current_week), weeks[0])
         today_tasks: list[str] = []
+        # Daily vocabulary is always part of the English block
+        current_vocab = current.get("daily_vocab", [])
+        pending_vocab = [d for d in current_vocab if not d["completed"]]
+        if pending_vocab:
+            today_tasks.append(f"English: Daily Vocabulary ({pending_vocab[0]['label']})")
         for sec in current.get("sections", []):
+            if sec["subject"] != "English":
+                continue
+            for t in sec["topics"]:
+                if not t["completed"]:
+                    today_tasks.append(f"English: {t['label']}")
+        for sec in current.get("sections", []):
+            if sec["subject"] == "English":
+                continue
             for t in sec["topics"]:
                 if not t["completed"]:
                     today_tasks.append(f"{sec['subject']}: {t['label']}")
@@ -428,4 +473,120 @@ class Roadmap2026Service:
             ],
             "weak_areas": weak_areas,
             "total_hours": hours_studied,
+        }
+
+    def _english_roadmap(
+        self,
+        weeks: list[dict],
+        all_topics: list[dict],
+        tasks_by_key: dict[tuple[int, str], UserRoadmapTaskProgress],
+        current_week: int,
+    ) -> dict:
+        english_topics = {t["label"]: t for t in all_topics if t["subject_key"] == "English"}
+        virtual_by_label: dict[str, bool] = {}
+        for w in weeks:
+            for v in w.get("virtual_tasks", []):
+                if v["label"] in {
+                    "Topic-wise Previous Year Questions",
+                    "Mixed Practice Sets",
+                    "Mock Test Revision",
+                    "Full English Revision",
+                }:
+                    virtual_by_label[v["label"]] = v["completed"]
+
+        phases_out = []
+        current_phase_id = ENGLISH_PHASES[-1]["id"]
+        for phase in ENGLISH_PHASES:
+            items = []
+            done = 0
+            for topic in phase["topics"]:
+                if phase.get("virtual"):
+                    completed = virtual_by_label.get(topic, False)
+                    items.append(
+                        {
+                            "label": topic,
+                            "completed": completed,
+                            "chapter_id": None,
+                            "virtual": True,
+                        }
+                    )
+                else:
+                    item = english_topics.get(topic)
+                    completed = bool(item and item["completed"])
+                    items.append(
+                        {
+                            "label": topic,
+                            "completed": completed,
+                            "chapter_id": item["chapter_id"] if item else None,
+                            "virtual": False,
+                        }
+                    )
+                if items[-1]["completed"]:
+                    done += 1
+            total = len(items)
+            pct = round(done / total * 100, 1) if total else 0
+            phases_out.append(
+                {
+                    "id": phase["id"],
+                    "name": phase["name"],
+                    "subtitle": phase["subtitle"],
+                    "weeks": phase["weeks"],
+                    "completion_pct": pct,
+                    "completed_count": done,
+                    "total_count": total,
+                    "topics": items,
+                }
+            )
+
+        for phase in phases_out:
+            if phase["completion_pct"] < 100:
+                current_phase_id = phase["id"]
+                break
+
+        current_week_data = next((w for w in weeks if w["number"] == current_week), weeks[0])
+        current_phase = next((p for p in phases_out if p["id"] == current_phase_id), phases_out[0])
+
+        return {
+            "phases": phases_out,
+            "current_phase_id": current_phase_id,
+            "current_phase_name": current_phase["name"],
+            "daily_block_minutes": ENGLISH_DAILY_BLOCK,
+            "daily_hours": DAILY_SCHEDULE["english_vocab_hours"],
+            "current_week_vocab": current_week_data.get("daily_vocab", []),
+            "current_week_english_topics": [
+                t
+                for sec in current_week_data.get("sections", [])
+                if sec["subject"] == "English"
+                for t in sec["topics"]
+            ],
+        }
+
+    def _vocab_streak(self, weeks: list[dict], current_week: int, today: date) -> dict:
+        """Consecutive Mon–Sat vocab days completed in the current week."""
+        current = next((w for w in weeks if w["number"] == current_week), None)
+        if not current:
+            return {"current_week_days": 0, "best_this_week": 0, "total_logged": 0}
+
+        days = current.get("daily_vocab", [])
+        weekday = today.weekday()  # Mon=0 … Sun=6
+        total_logged = sum(1 for d in days if d["completed"])
+
+        streak = 0
+        if weekday == 6:
+            # Sunday: count full Mon–Sat block
+            if all(d["completed"] for d in days):
+                streak = len(days)
+        else:
+            for i in range(min(weekday + 1, len(days))):
+                if days[i]["completed"]:
+                    streak += 1
+                else:
+                    break
+
+        return {
+            "current_week_days": streak,
+            "best_this_week": total_logged,
+            "total_logged": sum(
+                1 for w in weeks for d in w.get("daily_vocab", []) if d["completed"]
+            ),
         }
