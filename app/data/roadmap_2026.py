@@ -16,15 +16,24 @@ DAILY_SCHEDULE = {
     "sunday": "Mandatory full mock + analysis",
 }
 
-# Mon–Sat daily vocabulary (repeats every week of the roadmap)
-DAILY_VOCAB_DAYS: list[tuple[str, str]] = [
-    ("daily_vocab_mon", "Mon"),
-    ("daily_vocab_tue", "Tue"),
-    ("daily_vocab_wed", "Wed"),
-    ("daily_vocab_thu", "Thu"),
-    ("daily_vocab_fri", "Fri"),
-    ("daily_vocab_sat", "Sat"),
+# Mon–Sat daily habits (repeat every week of the roadmap)
+WEEKDAY_LABELS: list[tuple[str, str]] = [
+    ("mon", "Mon"),
+    ("tue", "Tue"),
+    ("wed", "Wed"),
+    ("thu", "Thu"),
+    ("fri", "Fri"),
+    ("sat", "Sat"),
 ]
+
+
+def _daily_habit_keys(prefix: str) -> list[tuple[str, str]]:
+    return [(f"{prefix}_{code}", label) for code, label in WEEKDAY_LABELS]
+
+
+DAILY_VOCAB_DAYS = _daily_habit_keys("daily_vocab")
+DAILY_GS_DAYS = _daily_habit_keys("daily_gs")
+DAILY_QR_DAYS = _daily_habit_keys("daily_qr")
 
 # English-only phases — follow this exact order
 ENGLISH_PHASES: list[dict] = [
@@ -109,6 +118,41 @@ ENGLISH_DAILY_BLOCK = [
     {"label": "New words + revision", "minutes": 45, "focus": "vocabulary"},
     {"label": "Grammar / topic of the week", "minutes": 75, "focus": "grammar"},
     {"label": "Practice (PYQ / exercises)", "minutes": 30, "focus": "practice"},
+]
+
+SUBJECT_DAILY_PLANS: list[dict] = [
+    {
+        "subject_key": "GS",
+        "label": "General Studies",
+        "hours": DAILY_SCHEDULE["gs_hours"],
+        "habit_field": "daily_gs",
+        "habit_label": "Daily GS study",
+        "blocks": [
+            {"label": "Current affairs + newspaper", "minutes": 60, "focus": "ca"},
+            {"label": "Static topic of the week", "minutes": 90, "focus": "static"},
+            {"label": "Revision / MCQs", "minutes": 30, "focus": "practice"},
+        ],
+    },
+    {
+        "subject_key": "English",
+        "label": "English",
+        "hours": DAILY_SCHEDULE["english_vocab_hours"],
+        "habit_field": "daily_vocab",
+        "habit_label": "Daily Vocabulary",
+        "blocks": ENGLISH_DAILY_BLOCK,
+    },
+    {
+        "subject_key": "Quant+Reasoning",
+        "label": "Quant + Reasoning",
+        "hours": DAILY_SCHEDULE["quant_reasoning_hours"],
+        "habit_field": "daily_qr",
+        "habit_label": "Daily Quant & Reasoning",
+        "blocks": [
+            {"label": "Quant practice", "minutes": 70, "focus": "quant"},
+            {"label": "Reasoning practice", "minutes": 40, "focus": "reasoning"},
+            {"label": "Formula / trick revision", "minutes": 10, "focus": "revision"},
+        ],
+    },
 ]
 
 # Map roadmap topic labels → existing syllabus chapter names (when names differ)

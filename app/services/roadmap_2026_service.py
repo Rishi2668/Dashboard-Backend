@@ -10,6 +10,8 @@ from sqlalchemy.orm import selectinload
 
 from app.data.roadmap_2026 import (
     CHAPTER_ALIASES,
+    DAILY_GS_DAYS,
+    DAILY_QR_DAYS,
     DAILY_SCHEDULE,
     DAILY_VOCAB_DAYS,
     ENGLISH_DAILY_BLOCK,
@@ -19,6 +21,7 @@ from app.data.roadmap_2026 import (
     PHASES,
     ROADMAP_END,
     ROADMAP_START,
+    SUBJECT_DAILY_PLANS,
     SUBJECT_SLUG,
     VIRTUAL_TASK_PREFIX,
     WEEKS,
@@ -163,18 +166,24 @@ class Roadmap2026Service:
             daily_vocab = [
                 daily_vocab_item(w["number"], key, label) for key, label in DAILY_VOCAB_DAYS
             ]
+            daily_gs = [daily_vocab_item(w["number"], key, label) for key, label in DAILY_GS_DAYS]
+            daily_qr = [daily_vocab_item(w["number"], key, label) for key, label in DAILY_QR_DAYS]
             all_vocab_days.extend(daily_vocab)
+            all_vocab_days.extend(daily_gs)
+            all_vocab_days.extend(daily_qr)
 
             week_total = (
                 len(week_topics)
                 + len(virtual)
                 + len([m for m in mocks if m["required"]])
                 + len(daily_vocab)
+                + len(daily_gs)
+                + len(daily_qr)
             )
             week_done = sum(1 for t in week_topics if t["completed"])
             week_done += sum(1 for v in virtual if v["completed"])
             week_done += sum(1 for m in mocks if m["required"] and m["completed"])
-            week_done += sum(1 for d in daily_vocab if d["completed"])
+            week_done += sum(1 for d in daily_vocab + daily_gs + daily_qr if d["completed"])
 
             all_topic_items.extend(week_topics)
             all_task_items.extend(virtual + mocks)
@@ -195,6 +204,8 @@ class Roadmap2026Service:
                     "virtual_tasks": virtual,
                     "mock_tasks": mocks,
                     "daily_vocab": daily_vocab,
+                    "daily_gs": daily_gs,
+                    "daily_qr": daily_qr,
                     "completion_pct": round(week_done / week_total * 100, 1) if week_total else 0,
                     "completed_count": week_done,
                     "total_count": week_total,
@@ -276,6 +287,7 @@ class Roadmap2026Service:
         current_week_num = _current_week_number(today)
         english_roadmap = self._english_roadmap(weeks_out, all_topic_items, tasks_by_key, current_week_num)
         vocab_streak = self._vocab_streak(weeks_out, current_week_num, today)
+        daily_study_hub = self._daily_study_hub(weeks_out, english_roadmap, current_week_num, today)
 
         return {
             "exam_label": EXAM_LABEL,
@@ -300,6 +312,7 @@ class Roadmap2026Service:
                 "pyq": pyq_count,
             },
             "english_roadmap": english_roadmap,
+            "daily_study_hub": daily_study_hub,
             "vocab_streak": vocab_streak,
             "productivity": productivity,
             "analytics": analytics,
@@ -589,4 +602,72 @@ class Roadmap2026Service:
             "total_logged": sum(
                 1 for w in weeks for d in w.get("daily_vocab", []) if d["completed"]
             ),
+        }
+
+    def _habit_streak(self, days: list[dict], today: date) -> int:
+        weekday = today.weekday()
+        if weekday == 6:
+            return len(days) if days and all(d["completed"] for d in days) else 0
+        streak = 0
+        for i in range(min(weekday + 1, len(days))):
+            if days[i]["completed"]:
+                streak += 1
+            else:
+                break
+        return streak
+
+    def _daily_study_hub(
+        self,
+        weeks: list[dict],
+        english_roadmap: dict,
+        current_week: int,
+        today: date,
+    ) -> dict:
+        current_week_data = next((w for w in weeks if w["number"] == current_week), weeks[0])
+        habit_map = {
+            "daily_gs": current_week_data.get("daily_gs", []),
+            "daily_vocab": current_week_data.get("daily_vocab", []),
+            "daily_qr": current_week_data.get("daily_qr", []),
+        }
+
+        def week_topics_for(subject_keys: tuple[str, ...]) -> list[dict]:
+            topics: list[dict] = []
+            for sec in current_week_data.get("sections", []):
+                if sec["subject"] in subject_keys:
+                    topics.extend(sec["topics"])
+            return topics
+
+        subjects_out = []
+        for plan in SUBJECT_DAILY_PLANS:
+            habits = habit_map.get(plan["habit_field"], [])
+            if plan["subject_key"] == "GS":
+                focus_topics = week_topics_for(("GS",))
+            elif plan["subject_key"] == "English":
+                focus_topics = week_topics_for(("English",))
+            else:
+                focus_topics = week_topics_for(("Quant", "Reasoning"))
+
+            next_topic = next((t["label"] for t in focus_topics if not t["completed"]), None)
+            subjects_out.append(
+                {
+                    "subject_key": plan["subject_key"],
+                    "label": plan["label"],
+                    "hours": plan["hours"],
+                    "habit_label": plan["habit_label"],
+                    "habit_field": plan["habit_field"],
+                    "blocks": plan["blocks"],
+                    "habits": habits,
+                    "habits_done": sum(1 for h in habits if h["completed"]),
+                    "streak": self._habit_streak(habits, today),
+                    "next_topic": next_topic,
+                    "week_topics": focus_topics,
+                }
+            )
+
+        return {
+            "current_week": current_week,
+            "subjects": subjects_out,
+            "english_phases": english_roadmap.get("phases", []),
+            "english_current_phase_id": english_roadmap.get("current_phase_id"),
+            "english_current_phase_name": english_roadmap.get("current_phase_name"),
         }

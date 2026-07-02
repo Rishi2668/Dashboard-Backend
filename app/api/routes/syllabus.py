@@ -1,3 +1,5 @@
+import logging
+
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, HTTPException
@@ -22,6 +24,7 @@ from app.utils.syllabus_seed import PRIORITY_LABELS
 from fastapi import Depends
 
 router = APIRouter(prefix="/syllabus", tags=["syllabus"])
+logger = logging.getLogger(__name__)
 
 
 def _revision_status_from_progress(prog: UserChapterProgress | None) -> str:
@@ -203,7 +206,10 @@ async def update_chapter_progress(
 
     prog.updated_at = datetime.now(timezone.utc)
     await db.flush()
-    await sync_user_xp(db, current_user)
+    try:
+        await sync_user_xp(db, current_user)
+    except Exception as exc:
+        logger.warning("XP sync skipped after chapter update: %s", exc)
     return _chapter_out(chapter, prog)
 
 

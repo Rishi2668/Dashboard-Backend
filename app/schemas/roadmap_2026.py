@@ -48,6 +48,8 @@ class RoadmapWeekOut(BaseModel):
     virtual_tasks: list[RoadmapTaskOut]
     mock_tasks: list[RoadmapTaskOut]
     daily_vocab: list[DailyVocabDayOut] = []
+    daily_gs: list[DailyVocabDayOut] = []
+    daily_qr: list[DailyVocabDayOut] = []
     completion_pct: float
     completed_count: int
     total_count: int
@@ -83,6 +85,7 @@ class Roadmap2026Out(BaseModel):
     completion_streak: int
     counters: dict
     english_roadmap: dict
+    daily_study_hub: dict
     vocab_streak: dict
     productivity: dict
     analytics: dict

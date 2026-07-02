@@ -3,7 +3,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -123,6 +123,16 @@ async def log_preflight(request: Request, call_next):
         _perf_metrics["slow_requests"] += 1
         logger.warning("Slow request: %s %s took %.1fms", request.method, request.url.path, elapsed_ms)
     return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    origin = request.headers.get("origin")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers={**_cors_headers_for_origin(origin), **(exc.headers or {})},
+    )
 
 
 @app.exception_handler(Exception)
